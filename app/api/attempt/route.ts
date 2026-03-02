@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { cookies } from "next/headers";
+import { decodeAnonTrial, encodeAnonTrial, ANON_COOKIE, ANON_MAX } from "@/lib/trialCookie";
 
 type AnswerRow = {
   questionId: string;
@@ -24,12 +26,29 @@ export async function POST(req: Request) {
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
   if (!supabaseUrl || !serviceKey) {
     return NextResponse.json({ error: "Missing env vars" }, { status: 500 });
   }
 
   const supabase = createClient(supabaseUrl, serviceKey);
+
+  // Optional auth: if Authorization bearer token is present, we track account-bound trial usage.
+  const auth = req.headers.get("authorization") || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
+
+  let authedUserId: string | null = null;
+  if (token && anonKey) {
+    try {
+      const supaAuth = createClient(supabaseUrl, anonKey);
+      const { data: userData } = await supaAuth.auth.getUser(token);
+      authedUserId = userData?.user?.id ?? null;
+    } catch {
+      authedUserId = null;
+    }
+  }
+
 
   const { error: attemptError } = await supabase
     .from("quiz_attempts")
@@ -46,6 +65,19 @@ export async function POST(req: Request) {
 
   if (attemptError) {
     return NextResponse.json({ error: attemptError.message }, { status: 500 });
+  }
+
+  // Track how many answers were already saved for this attempt (delta-based usage)
+  let prevAnsweredCount = 0;
+  try {
+    const { count } = await supabase
+      .from("quiz_attempt_answers")
+      .select("question_id", { count: "exact", head: true })
+      .eq("quiz_attempt_id", body.quizAttemptId)
+      .not("selected_key", "is", null);
+    prevAnsweredCount = Number(count ?? 0);
+  } catch {
+    prevAnsweredCount = 0;
   }
 
   const { error: delError } = await supabase
@@ -74,5 +106,69 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: ansError.message }, { status: 500 });
   }
 
-  return NextResponse.json({ ok: true });
+
+  // If logged in: increment trial usage by ANSWERED questions (selectedKey not null).
+  // Count answered, not fetched, to avoid refresh inflation.
+  if (authedUserId) {
+    const answeredCount = Array.isArray(body.answers)
+      ? body.answers.filter((a) => a?.selectedKey != null).length
+      : 0;
+    const delta = Math.max(0, answeredCount - prevAnsweredCount);
+
+    if (delta > 0) {
+      const { data: prof, error: profErr } = await supabase
+        .from("profiles")
+        .select("plan, trial_questions_used")
+        .eq("id", authedUserId)
+        .maybeSingle();
+
+      if (profErr) {
+        // Do not fail the attempt write if profile tracking fails.
+      } else if (!prof) {
+        await supabase.from("profiles").insert({
+          id: authedUserId,
+          plan: "trial",
+          trial_questions_used: delta,
+        });
+      } else if ((prof.plan ?? "trial") === "trial") {
+        const currentUsed = Number(prof.trial_questions_used ?? 0);
+        const maxTrial = 20;
+        if (currentUsed + delta > maxTrial) {
+          return NextResponse.json({ code: "TRIAL_EXHAUSTED" }, { status: 403 });
+        }
+        await supabase
+          .from("profiles")
+          .update({ trial_questions_used: currentUsed + delta })
+          .eq("id", authedUserId);
+      }
+    }
+  }
+
+    // 🔒 Server-side trial enforcement (answer-based)
+  const answeredCount = Array.isArray(body.answers)
+    ? body.answers.filter((a) => a?.selectedKey != null).length
+    : 0;
+
+  // Anonymous: enforce 3 answered questions via signed cookie
+  if (!authedUserId && delta > 0) {
+    const jar = await cookies();
+    const parsed = decodeAnonTrial(jar.get(ANON_COOKIE)?.value);
+    const already = (parsed.valid && !parsed.expired) ? parsed.answered : 0;
+
+    if (already + delta > ANON_MAX) {
+      return NextResponse.json({ code: "ANON_TRIAL_EXHAUSTED" }, { status: 403 });
+    }
+
+    // bump cookie count
+    const res = NextResponse.json({ ok: true });
+    res.cookies.set(ANON_COOKIE, encodeAnonTrial(already + delta), {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 7,
+    });
+    return res;
+  }
+return NextResponse.json({ ok: true });
 }
