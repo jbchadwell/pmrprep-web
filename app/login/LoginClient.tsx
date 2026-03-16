@@ -68,10 +68,13 @@ export default function LoginPage() {
   }
 
   const title =
-    mode === "signup" ? "Create your free PMRPrep account" : "Log in to continue";
+    mode === "signup"
+      ? "Create an account to unlock the rest of the free trial"
+      : "Log in to continue your free trial";
+
   const description =
     mode === "signup"
-      ? "You’ve finished your 3-question preview. Create a free account to continue your 20-question PMRPrep trial."
+      ? "You’ve finished your 3-question preview. Create an account to continue the rest of your 20-question PMRPrep free trial."
       : "Welcome back. Log in to continue your PMRPrep free trial.";
 
   return (
@@ -102,14 +105,14 @@ export default function LoginPage() {
               <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="text-sm font-semibold text-slate-900">Free trial</div>
                 <div className="mt-1 text-sm text-slate-600">
-                  Continue through the full 20-question PMRPrep trial.
+                  Continue through the full 20-question trial after creating an account.
                 </div>
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="text-sm font-semibold text-slate-900">Built for PM&amp;R</div>
+                <div className="text-sm font-semibold text-slate-900">Subscription</div>
                 <div className="mt-1 text-sm text-slate-600">
-                  Focused board-style prep designed for ABPMR studying.
+                  View the three subscription options available after your free trial.
                 </div>
               </div>
             </div>
@@ -121,7 +124,21 @@ export default function LoginPage() {
               <div className="mt-2 space-y-2 text-sm text-blue-900/90">
                 <p>1. Create your account or log in.</p>
                 <p>2. Return to your quiz automatically.</p>
-                <p>3. Continue your free trial from where you left off.</p>
+                <p>3. Continue the rest of your free trial.</p>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="text-sm font-semibold text-slate-900">
+                Want to review plans first?
+              </div>
+              <div className="mt-2 text-sm text-slate-600">
+                You can also view the three PMRPrep subscription options before creating an account.
+              </div>
+              <div className="mt-4">
+                <Link href="/explore-subscriptions">
+                  <Button variant="outline">View subscription options</Button>
+                </Link>
               </div>
             </div>
 
