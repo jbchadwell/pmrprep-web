@@ -15,6 +15,7 @@ type AnswerRow = {
 type Body = {
   sessionId: string;
   quizAttemptId: string;
+  currentIndex: number;
   totalQuestions: number;
   correctCount: number;
   percentCorrect: number;
@@ -34,7 +35,6 @@ export async function POST(req: Request) {
 
   const supabase = createClient(supabaseUrl, serviceKey);
 
-  // Optional auth: if Authorization bearer token is present, we track account-bound trial usage.
   const auth = req.headers.get("authorization") || "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
 
@@ -49,25 +49,10 @@ export async function POST(req: Request) {
     }
   }
 
+  const answeredCount = Array.isArray(body.answers)
+    ? body.answers.filter((a) => a?.selectedKey != null).length
+    : 0;
 
-  const { error: attemptError } = await supabase
-    .from("quiz_attempts")
-    .upsert(
-      {
-        session_id: body.sessionId,
-        quiz_attempt_id: body.quizAttemptId,
-        total_questions: body.totalQuestions,
-        correct_count: body.correctCount,
-        percent_correct: body.percentCorrect,
-      },
-      { onConflict: "quiz_attempt_id" }
-    );
-
-  if (attemptError) {
-    return NextResponse.json({ error: attemptError.message }, { status: 500 });
-  }
-
-  // Track how many answers were already saved for this attempt (delta-based usage)
   let prevAnsweredCount = 0;
   try {
     const { count } = await supabase
@@ -75,9 +60,40 @@ export async function POST(req: Request) {
       .select("question_id", { count: "exact", head: true })
       .eq("quiz_attempt_id", body.quizAttemptId)
       .not("selected_key", "is", null);
+
     prevAnsweredCount = Number(count ?? 0);
   } catch {
     prevAnsweredCount = 0;
+  }
+
+  const delta = Math.max(0, answeredCount - prevAnsweredCount);
+
+  const { error: attemptError } = await supabase
+    .from("quiz_attempts")
+    .upsert(
+      {
+        id: body.quizAttemptId,
+        quiz_attempt_id: body.quizAttemptId,
+        session_id: body.sessionId,
+        anon_session_id: body.sessionId,
+        user_id: authedUserId,
+        total_questions: body.totalQuestions,
+        correct_count: body.correctCount,
+        percent_correct: body.percentCorrect,
+        answered_count: answeredCount,
+        status: answeredCount >= body.totalQuestions ? "completed" : "in_progress",
+        mode: "random",
+        title: "Quiz",
+        current_index: Math.min(
+          Math.max(0, Number(body.currentIndex ?? 0) || 0),
+          Math.max(0, body.totalQuestions - 1)
+        ),
+      },
+      { onConflict: "id" }
+    );
+
+  if (attemptError) {
+    return NextResponse.json({ error: attemptError.message }, { status: 500 });
   }
 
   const { error: delError } = await supabase
@@ -92,6 +108,7 @@ export async function POST(req: Request) {
   const rows = body.answers.map((a) => ({
     quiz_attempt_id: body.quizAttemptId,
     session_id: body.sessionId,
+    user_id: authedUserId,
     question_id: a.questionId,
     question_uid: a.questionUid ?? null,
     primary_category: a.primaryCategory ?? null,
@@ -100,31 +117,25 @@ export async function POST(req: Request) {
     is_correct: a.isCorrect ?? null,
   }));
 
-  const { error: ansError } = await supabase.from("quiz_attempt_answers").insert(rows);
+  if (rows.length > 0) {
+    const { error: ansError } = await supabase
+      .from("quiz_attempt_answers")
+      .insert(rows);
 
-  if (ansError) {
-    return NextResponse.json({ error: ansError.message }, { status: 500 });
+    if (ansError) {
+      return NextResponse.json({ error: ansError.message }, { status: 500 });
+    }
   }
 
+  if (authedUserId && delta > 0) {
+    const { data: prof, error: profErr } = await supabase
+      .from("profiles")
+      .select("plan, trial_questions_used")
+      .eq("id", authedUserId)
+      .maybeSingle();
 
-  // If logged in: increment trial usage by ANSWERED questions (selectedKey not null).
-  // Count answered, not fetched, to avoid refresh inflation.
-  if (authedUserId) {
-    const answeredCount = Array.isArray(body.answers)
-      ? body.answers.filter((a) => a?.selectedKey != null).length
-      : 0;
-    const delta = Math.max(0, answeredCount - prevAnsweredCount);
-
-    if (delta > 0) {
-      const { data: prof, error: profErr } = await supabase
-        .from("profiles")
-        .select("plan, trial_questions_used")
-        .eq("id", authedUserId)
-        .maybeSingle();
-
-      if (profErr) {
-        // Do not fail the attempt write if profile tracking fails.
-      } else if (!prof) {
+    if (!profErr) {
+      if (!prof) {
         await supabase.from("profiles").insert({
           id: authedUserId,
           plan: "trial",
@@ -133,9 +144,11 @@ export async function POST(req: Request) {
       } else if ((prof.plan ?? "trial") === "trial") {
         const currentUsed = Number(prof.trial_questions_used ?? 0);
         const maxTrial = 20;
+
         if (currentUsed + delta > maxTrial) {
           return NextResponse.json({ code: "TRIAL_EXHAUSTED" }, { status: 403 });
         }
+
         await supabase
           .from("profiles")
           .update({ trial_questions_used: currentUsed + delta })
@@ -144,22 +157,15 @@ export async function POST(req: Request) {
     }
   }
 
-    // 🔒 Server-side trial enforcement (answer-based)
-  const answeredCount = Array.isArray(body.answers)
-    ? body.answers.filter((a) => a?.selectedKey != null).length
-    : 0;
-
-  // Anonymous: enforce 3 answered questions via signed cookie
   if (!authedUserId && delta > 0) {
     const jar = await cookies();
     const parsed = decodeAnonTrial(jar.get(ANON_COOKIE)?.value);
-    const already = (parsed.valid && !parsed.expired) ? parsed.answered : 0;
+    const already = parsed.valid && !parsed.expired ? parsed.answered : 0;
 
     if (already + delta > ANON_MAX) {
       return NextResponse.json({ code: "ANON_TRIAL_EXHAUSTED" }, { status: 403 });
     }
 
-    // bump cookie count
     const res = NextResponse.json({ ok: true });
     res.cookies.set(ANON_COOKIE, encodeAnonTrial(already + delta), {
       httpOnly: true,
@@ -170,5 +176,6 @@ export async function POST(req: Request) {
     });
     return res;
   }
-return NextResponse.json({ ok: true });
+
+  return NextResponse.json({ ok: true });
 }

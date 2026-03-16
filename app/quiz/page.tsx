@@ -65,6 +65,50 @@ mode: "quiz",
   const [flagComment, setFlagComment] = useState("");
   const savingFlagRef = useRef(false);
 
+  async function hydrateAttempt(attemptId: string, reviewMode: boolean) {
+    setLoading(true);
+
+    const res = await fetch(`/api/attempt-detail?attempt_id=${encodeURIComponent(attemptId)}`);
+    const json = await res.json();
+
+    if (!res.ok) {
+      throw new Error(json?.error || "Failed to load saved attempt");
+    }
+
+    const mapped = (json.questions ?? []).map(mapDbRowToQuizQuestion);
+
+    const answerMap: Record<string, AnswerState> = {};
+    for (const row of json.answers ?? []) {
+      if (!row?.question_id) continue;
+      answerMap[row.question_id] = {
+        selectedKey: row.selected_key ?? undefined,
+        submitted: row.selected_key != null,
+        isCorrect: row.is_correct ?? undefined,
+      };
+    }
+
+    const next: QuizState = {
+      questions: mapped,
+      answersById: answerMap,
+      currentIndex: Math.min(
+        Math.max(0, Number(json.attempt?.current_index ?? 0) || 0),
+        Math.max(0, mapped.length - 1)
+      ),
+      mode: reviewMode || json.attempt?.status === "completed" ? "summary" : "quiz",
+      sessionId:
+        json.attempt?.session_id ||
+        json.attempt?.anon_session_id ||
+        getOrCreateSessionId(),
+      quizAttemptId:
+        json.attempt?.id ||
+        json.attempt?.quiz_attempt_id ||
+        attemptId,
+    };
+
+    setState(next);
+    setLoading(false);
+  }
+
   async function fetchNewQuiz() {
     const sessionId = getOrCreateSessionId();
     const quizAttemptId = newAttemptId();
@@ -73,6 +117,8 @@ mode: "quiz",
 
     const params = new URLSearchParams(window.location.search);
     const mode = params.get("mode");
+    const countParam = Number(params.get("count") || "10");
+    const count = Number.isFinite(countParam) && countParam > 0 ? countParam : 10;
 
     let res: Response;
 
@@ -81,7 +127,7 @@ mode: "quiz",
       const config = raw ? JSON.parse(raw) : null;
 
       if (!config?.primaryCategories?.length) {
-        window.location.href = "/custom-quiz";
+        window.location.href = "/builder";
         return;
       }
 
@@ -94,11 +140,20 @@ mode: "quiz",
         }),
       });
     } else {
-      res = await fetch("/api/quiz?count=10");
+      res = await fetch(`/api/quiz?count=${count}`);
     }
 
-    const json = (await res.json()) as { questions: DbQuestionRow[] };
-    const mapped = (json.questions ?? []).map(mapDbRowToQuizQuestion);
+    const json = await res.json();
+
+    if (!res.ok) {
+      throw new Error(json?.error || "Failed to load quiz questions");
+    }
+
+    const mapped = ((json.questions ?? []) as DbQuestionRow[]).map(mapDbRowToQuizQuestion);
+
+    if (!mapped.length) {
+      throw new Error("Quiz API returned zero questions");
+    }
 
     const next: QuizState = {
       questions: mapped,
@@ -119,7 +174,17 @@ mode: "quiz",
     const params = new URLSearchParams(window.location.search);
     const mode = params.get("mode");
     const fresh = params.get("fresh");
-    const shouldBypassRestore = mode === "custom" || fresh === "1";
+    const attemptId = params.get("attempt_id");
+    const review = params.get("review") === "1";
+    const shouldBypassRestore = mode === "custom" || fresh === "1" || Boolean(attemptId);
+
+    if (attemptId) {
+      hydrateAttempt(attemptId, review).catch((err) => {
+        console.error("hydrateAttempt failed", err);
+        setLoading(false);
+      });
+      return;
+    }
 
     const saved = shouldBypassRestore ? null : localStorage.getItem(STORAGE_KEY);
     if (saved) {
@@ -133,13 +198,17 @@ mode: "quiz",
       } catch {}
     }
 
-    fetchNewQuiz().catch(() => setLoading(false));
+    fetchNewQuiz().catch((err) => {
+      console.error("fetchNewQuiz failed", err);
+      setLoading(false);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (!loading) localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   }, [state, loading]);
+
 
   const currentQuestion = state.questions[state.currentIndex];
   const ans = currentQuestion ? state.answersById[currentQuestion.id] : undefined;
@@ -160,6 +229,97 @@ const hasAnswered = hasSubmitted;
       ? { text: "Correct", tone: "good" as const }
       : { text: "Incorrect", tone: "bad" as const };
   }, [state.answersById, currentQuestion]);
+
+  const total = state.questions.length;
+
+  const correctCount = useMemo(() => {
+    return state.questions.reduce(
+      (acc, q) => acc + (state.answersById[q.id]?.isCorrect ? 1 : 0),
+      0
+    );
+  }, [state.questions, state.answersById]);
+
+  const percentCorrect = total ? Math.round((correctCount / total) * 100) : 0;
+
+  const missedByCategory = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const q of state.questions) {
+      const a = state.answersById[q.id];
+      if (a?.selectedKey && a.isCorrect === false) {
+        const cat = q.primaryCategory || "Uncategorized";
+        counts.set(cat, (counts.get(cat) ?? 0) + 1);
+      }
+    }
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+  }, [state.questions, state.answersById]);
+
+  async function saveAttemptProgress(useBeacon = false) {
+    if (!state.sessionId || !state.quizAttemptId || !state.questions.length) return;
+
+    const answersPayload = state.questions.map((q) => {
+      const a = state.answersById[q.id];
+      const correct = q.choices.find((c) => c.isCorrect)?.key;
+      return {
+        questionId: q.id,
+        questionUid: q.uid,
+        primaryCategory: q.primaryCategory ?? null,
+        selectedKey: a?.selectedKey,
+        correctKey: correct,
+        isCorrect: a?.isCorrect,
+      };
+    });
+
+    const payload = {
+      sessionId: state.sessionId,
+      quizAttemptId: state.quizAttemptId,
+      currentIndex: state.currentIndex,
+      totalQuestions: state.questions.length,
+      correctCount,
+      percentCorrect,
+      answers: answersPayload,
+    };
+
+    if (
+      useBeacon &&
+      typeof navigator !== "undefined" &&
+      typeof navigator.sendBeacon === "function"
+    ) {
+      const blob = new Blob([JSON.stringify(payload)], {
+        type: "application/json",
+      });
+      navigator.sendBeacon("/api/attempt", blob);
+      return;
+    }
+
+    await fetch("/api/attempt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  useEffect(() => {
+    if (loading) return;
+    if (state.mode !== "quiz") return;
+    if (!state.sessionId || !state.quizAttemptId || !state.questions.length) return;
+
+    const timer = window.setTimeout(() => {
+      saveAttemptProgress().catch(() => {});
+    }, 600);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    state.answersById,
+    state.currentIndex,
+    state.mode,
+    state.questions,
+    state.quizAttemptId,
+    state.sessionId,
+    loading,
+    correctCount,
+    percentCorrect,
+  ]);
+
 
   function selectAnswer(key: ChoiceKey) {
     if (!currentQuestion) return;
@@ -204,32 +364,8 @@ const hasAnswered = hasSubmitted;
 
     if (state.currentIndex >= lastIndex) {
       if (hasSubmitted) {
-        const answersPayload = state.questions.map((q) => {
-          const a = state.answersById[q.id];
-          const correct = q.choices.find((c) => c.isCorrect)?.key;
-          return {
-            questionId: q.id,
-            questionUid: q.uid,
-            primaryCategory: q.primaryCategory ?? null,
-            selectedKey: a?.selectedKey,
-            correctKey: correct,
-            isCorrect: a?.isCorrect,
-          };
-        });
-
         try {
-          await fetch("/api/attempt", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              sessionId: state.sessionId,
-              quizAttemptId: state.quizAttemptId,
-              totalQuestions: state.questions.length,
-              correctCount,
-              percentCorrect,
-              answers: answersPayload,
-            }),
-          });
+          await saveAttemptProgress();
         } catch {}
 
         setState((s) => ({ ...s, mode: "summary" }));
@@ -322,6 +458,36 @@ const hasAnswered = hasSubmitted;
     }
   }
 
+
+  useEffect(() => {
+    function flushProgress() {
+      saveAttemptProgress(true);
+    }
+
+    function onVisibilityChange() {
+      if (document.visibilityState === "hidden") {
+        flushProgress();
+      }
+    }
+
+    window.addEventListener("beforeunload", flushProgress);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      window.removeEventListener("beforeunload", flushProgress);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [
+    state.answersById,
+    state.currentIndex,
+    state.mode,
+    state.questions,
+    state.quizAttemptId,
+    state.sessionId,
+    correctCount,
+    percentCorrect,
+  ]);
+
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (state.mode !== "quiz") return;
@@ -348,28 +514,6 @@ const hasAnswered = hasSubmitted;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasAnswered, state.mode, state.currentIndex]);
 
-  const total = state.questions.length;
-
-  const correctCount = useMemo(() => {
-    return state.questions.reduce(
-      (acc, q) => acc + (state.answersById[q.id]?.isCorrect ? 1 : 0),
-      0
-    );
-  }, [state.questions, state.answersById]);
-
-  const percentCorrect = total ? Math.round((correctCount / total) * 100) : 0;
-
-  const missedByCategory = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const q of state.questions) {
-      const a = state.answersById[q.id];
-      if (a?.selectedKey && a.isCorrect === false) {
-        const cat = q.primaryCategory || "Uncategorized";
-        counts.set(cat, (counts.get(cat) ?? 0) + 1);
-      }
-    }
-    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
-  }, [state.questions, state.answersById]);
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center text-sm text-gray-600">

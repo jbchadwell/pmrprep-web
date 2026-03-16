@@ -45,7 +45,7 @@ function formatLabel(item: RecentItem) {
 }
 
 export function recordCurrentBuilderConfig(label: string) {
-  // Call this from Builder right before routing to /engine?mode=custom&fresh=1
+  // Call this from Builder right before routing to /quiz?mode=custom&fresh=1
   const cfg = safeJsonParse<any>(localStorage.getItem(CUSTOM_KEY));
   if (!cfg) return;
 
@@ -95,7 +95,7 @@ export default function ResumeAndRecent({
 
   function runRecent(item: RecentItem) {
     localStorage.setItem(CUSTOM_KEY, JSON.stringify(item.config));
-    router.push("/engine?mode=custom&fresh=1");
+    router.push("/quiz?mode=custom&fresh=1");
   }
 
   return (
@@ -107,7 +107,7 @@ export default function ResumeAndRecent({
 
       <div className="mt-4 flex flex-wrap gap-2">
         <button
-          onClick={() => router.push("/engine")}
+          onClick={() => router.push("/quiz")}
           disabled={!canResume}
           className={[
             "inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-medium transition shadow-sm",
@@ -118,7 +118,7 @@ export default function ResumeAndRecent({
         </button>
 
         <button
-          onClick={() => router.push("/engine?fresh=1")}
+          onClick={() => router.push("/quiz?fresh=1")}
           className="inline-flex items-center justify-center rounded-xl border bg-white px-4 py-2 text-sm font-medium hover:shadow"
         >
           Start fresh
