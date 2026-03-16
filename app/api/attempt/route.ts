@@ -22,6 +22,8 @@ type Body = {
   answers: AnswerRow[];
 };
 
+const TRIAL_LIMIT = 20;
+
 export async function POST(req: Request) {
   const body = (await req.json()) as Body;
 
@@ -29,7 +31,7 @@ export async function POST(req: Request) {
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
-  if (!supabaseUrl || !serviceKey) {
+  if (!supabaseUrl || !serviceKey || !anonKey) {
     return NextResponse.json({ error: "Missing env vars" }, { status: 500 });
   }
 
@@ -39,7 +41,7 @@ export async function POST(req: Request) {
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
 
   let authedUserId: string | null = null;
-  if (token && anonKey) {
+  if (token) {
     try {
       const supaAuth = createClient(supabaseUrl, anonKey);
       const { data: userData } = await supaAuth.auth.getUser(token);
@@ -67,6 +69,47 @@ export async function POST(req: Request) {
   }
 
   const delta = Math.max(0, answeredCount - prevAnsweredCount);
+
+  if (authedUserId && delta > 0) {
+    const { data: prof, error: profErr } = await supabase
+      .from("profiles")
+      .select("plan, trial_questions_used")
+      .eq("id", authedUserId)
+      .maybeSingle();
+
+    if (profErr) {
+      return NextResponse.json({ error: profErr.message }, { status: 500 });
+    }
+
+    const plan = (prof?.plan ?? "trial") as string;
+    const currentUsed = Number(prof?.trial_questions_used ?? 0);
+
+    if (plan === "trial" && currentUsed + delta > TRIAL_LIMIT) {
+      return NextResponse.json(
+        {
+          code: "TRIAL_EXHAUSTED",
+          message: "Your 20-question free trial is complete.",
+        },
+        { status: 403 }
+      );
+    }
+  }
+
+  if (!authedUserId && delta > 0) {
+    const jar = await cookies();
+    const parsed = decodeAnonTrial(jar.get(ANON_COOKIE)?.value);
+    const already = parsed.valid && !parsed.expired ? parsed.answered : 0;
+
+    if (already + delta > ANON_MAX) {
+      return NextResponse.json(
+        {
+          code: "ANON_TRIAL_EXHAUSTED",
+          message: "You’ve finished your 3-question preview. Create a free account to continue.",
+        },
+        { status: 403 }
+      );
+    }
+  }
 
   const { error: attemptError } = await supabase
     .from("quiz_attempts")
@@ -134,25 +177,30 @@ export async function POST(req: Request) {
       .eq("id", authedUserId)
       .maybeSingle();
 
-    if (!profErr) {
-      if (!prof) {
-        await supabase.from("profiles").insert({
-          id: authedUserId,
-          plan: "trial",
-          trial_questions_used: delta,
-        });
-      } else if ((prof.plan ?? "trial") === "trial") {
-        const currentUsed = Number(prof.trial_questions_used ?? 0);
-        const maxTrial = 20;
+    if (profErr) {
+      return NextResponse.json({ error: profErr.message }, { status: 500 });
+    }
 
-        if (currentUsed + delta > maxTrial) {
-          return NextResponse.json({ code: "TRIAL_EXHAUSTED" }, { status: 403 });
-        }
+    if (!prof) {
+      const { error: insertErr } = await supabase.from("profiles").insert({
+        id: authedUserId,
+        plan: "trial",
+        trial_questions_used: delta,
+      });
 
-        await supabase
-          .from("profiles")
-          .update({ trial_questions_used: currentUsed + delta })
-          .eq("id", authedUserId);
+      if (insertErr) {
+        return NextResponse.json({ error: insertErr.message }, { status: 500 });
+      }
+    } else if ((prof.plan ?? "trial") === "trial") {
+      const currentUsed = Number(prof.trial_questions_used ?? 0);
+
+      const { error: updateErr } = await supabase
+        .from("profiles")
+        .update({ trial_questions_used: currentUsed + delta })
+        .eq("id", authedUserId);
+
+      if (updateErr) {
+        return NextResponse.json({ error: updateErr.message }, { status: 500 });
       }
     }
   }
@@ -161,10 +209,6 @@ export async function POST(req: Request) {
     const jar = await cookies();
     const parsed = decodeAnonTrial(jar.get(ANON_COOKIE)?.value);
     const already = parsed.valid && !parsed.expired ? parsed.answered : 0;
-
-    if (already + delta > ANON_MAX) {
-      return NextResponse.json({ code: "ANON_TRIAL_EXHAUSTED" }, { status: 403 });
-    }
 
     const res = NextResponse.json({ ok: true });
     res.cookies.set(ANON_COOKIE, encodeAnonTrial(already + delta), {
