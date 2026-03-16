@@ -75,16 +75,18 @@ mode: "quiz",
   const [flagComment, setFlagComment] = useState("");
   const savingFlagRef = useRef(false);
 
-  function clearQuizStateAndRedirect(target: string) {
-    localStorage.removeItem(STORAGE_KEY);
-    localStorage.removeItem(CUSTOM_KEY);
+  function clearQuizStateAndRedirect(target: string, clearState = true) {
+    if (clearState) {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(CUSTOM_KEY);
+    }
     setLoading(false);
     router.push(target);
   }
 
   function handleGateResponse(code?: string) {
     if (code === "ANON_TRIAL_EXHAUSTED") {
-      clearQuizStateAndRedirect("/login");
+      clearQuizStateAndRedirect("/login", false);
       return true;
     }
 
@@ -417,6 +419,18 @@ const hasAnswered = hasSubmitted;
 
   async function goNext() {
     const lastIndex = state.questions.length - 1;
+
+    const params = new URLSearchParams(window.location.search);
+    const src = params.get("src");
+    const token = await getAccessToken();
+
+    if (src === "trial" && !token && hasSubmitted && state.currentIndex >= 2) {
+      try {
+        await saveAttemptProgress();
+      } catch {}
+      clearQuizStateAndRedirect("/login", false);
+      return;
+    }
 
     if (state.currentIndex >= lastIndex) {
       if (hasSubmitted) {

@@ -31,6 +31,7 @@ export async function GET(req: Request) {
 
   const { searchParams } = new URL(req.url);
   const requestedCount = Number(searchParams.get("count") ?? "10");
+  const src = searchParams.get("src") ?? "";
   const safeRequestedCount =
     Number.isFinite(requestedCount) && requestedCount > 0
       ? Math.floor(requestedCount)
@@ -82,7 +83,11 @@ export async function GET(req: Request) {
       );
     }
 
-    allowedCount = Math.min(safeRequestedCount, remaining);
+    if (src === "trial") {
+      allowedCount = safeRequestedCount;
+    } else {
+      allowedCount = Math.min(safeRequestedCount, remaining);
+    }
   }
 
   const { data, error } = await supabase.rpc("get_random_questions", {
