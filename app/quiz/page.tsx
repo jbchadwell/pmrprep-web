@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import type { ChoiceKey, DbQuestionRow, QuizQuestion } from "@/lib/quizTypes";
 import { mapDbRowToQuizQuestion } from "@/lib/mapQuestion";
 import QuizHeader from "./QuizHeader";
+import { supabaseBrowser } from "@/lib/supabaseBrowser";
 
 type FlagReason = "incorrect" | "poorly_worded" | "other";
 
@@ -46,6 +47,15 @@ function newAttemptId(): string {
   return crypto.randomUUID();
 }
 
+async function getAccessToken(): Promise<string | null> {
+  try {
+    const { data } = await supabaseBrowser.auth.getSession();
+    return data.session?.access_token ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export default function QuizPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
@@ -64,6 +74,27 @@ mode: "quiz",
   const [flagReason, setFlagReason] = useState<FlagReason>("incorrect");
   const [flagComment, setFlagComment] = useState("");
   const savingFlagRef = useRef(false);
+
+  function clearQuizStateAndRedirect(target: string) {
+    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(CUSTOM_KEY);
+    setLoading(false);
+    router.push(target);
+  }
+
+  function handleGateResponse(code?: string) {
+    if (code === "ANON_TRIAL_EXHAUSTED") {
+      clearQuizStateAndRedirect("/login");
+      return true;
+    }
+
+    if (code === "TRIAL_EXHAUSTED") {
+      clearQuizStateAndRedirect("/subscribe");
+      return true;
+    }
+
+    return false;
+  }
 
   async function hydrateAttempt(attemptId: string, reviewMode: boolean) {
     setLoading(true);
@@ -119,6 +150,10 @@ mode: "quiz",
     const mode = params.get("mode");
     const countParam = Number(params.get("count") || "10");
     const count = Number.isFinite(countParam) && countParam > 0 ? countParam : 10;
+    const token = await getAccessToken();
+    const authHeaders: Record<string, string> = token
+      ? { Authorization: `Bearer ${token}` }
+      : {};
 
     let res: Response;
 
@@ -133,20 +168,26 @@ mode: "quiz",
 
       res = await fetch("/api/quiz/custom", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders,
+        } as HeadersInit,
         body: JSON.stringify({
           count: config.count ?? 10,
           primaryCategories: config.primaryCategories,
         }),
       });
     } else {
-      res = await fetch(`/api/quiz?count=${count}`);
+      res = await fetch(`/api/quiz?count=${count}`, {
+        headers: authHeaders as HeadersInit,
+      });
     }
 
-    const json = await res.json();
+    const json = await res.json().catch(() => ({}));
 
     if (!res.ok) {
-      throw new Error(json?.error || "Failed to load quiz questions");
+      if (handleGateResponse(json?.code)) return;
+      throw new Error(json?.error || json?.message || "Failed to load quiz questions");
     }
 
     const mapped = ((json.questions ?? []) as DbQuestionRow[]).map(mapDbRowToQuizQuestion);
@@ -279,8 +320,14 @@ const hasAnswered = hasSubmitted;
       answers: answersPayload,
     };
 
+    const token = await getAccessToken();
+    const authHeaders: Record<string, string> = token
+      ? { Authorization: `Bearer ${token}` }
+      : {};
+
     if (
       useBeacon &&
+      !token &&
       typeof navigator !== "undefined" &&
       typeof navigator.sendBeacon === "function"
     ) {
@@ -291,11 +338,20 @@ const hasAnswered = hasSubmitted;
       return;
     }
 
-    await fetch("/api/attempt", {
+    const res = await fetch("/api/attempt", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders,
+      } as HeadersInit,
       body: JSON.stringify(payload),
     });
+
+    if (!res.ok) {
+      const json = await res.json().catch(() => ({}));
+      if (handleGateResponse(json?.code)) return;
+      throw new Error(json?.error || json?.message || "Failed to save attempt");
+    }
   }
 
   useEffect(() => {
