@@ -150,6 +150,7 @@ mode: "quiz",
 
     const params = new URLSearchParams(window.location.search);
     const mode = params.get("mode");
+    const src = params.get("src");
     const countParam = Number(params.get("count") || "10");
     const count = Number.isFinite(countParam) && countParam > 0 ? countParam : 10;
     const token = await getAccessToken();
@@ -180,7 +181,11 @@ mode: "quiz",
         }),
       });
     } else {
-      res = await fetch(`/api/quiz?count=${count}`, {
+      const quizApiParams = new URLSearchParams();
+      quizApiParams.set("count", String(count));
+      if (src) quizApiParams.set("src", src);
+
+      res = await fetch(`/api/quiz?${quizApiParams.toString()}`, {
         headers: authHeaders as HeadersInit,
       });
     }
