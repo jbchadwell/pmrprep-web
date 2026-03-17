@@ -1,9 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
-import { useAccessGate } from "@/lib/access/useAccessGate";
+import { useEffect, useState } from "react";
 import Button from "@/app/_components/ui/button";
 import {
   Card,
@@ -79,39 +77,11 @@ function statusLabel(status: "not_started" | "in_progress" | "completed") {
   return "Not started";
 }
 
-function LockedFeatureCard({
-  title,
-  description,
-}: {
-  title: string;
-  description: string;
-}) {
-  return (
-    <Card muted>
-      <CardHeader>
-        <CardDescription>Subscriber Feature</CardDescription>
-        <CardTitle className="flex items-center justify-between gap-2 text-lg">
-          <span>{title}</span>
-          <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600">
-            Locked
-          </span>
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <p className="text-sm text-slate-600">{description}</p>
-      </CardContent>
-    </Card>
-  );
-}
-
 export default function DashboardPage() {
-  const router = useRouter();
-  const access = useAccessGate();
-
   const [data, setData] = useState<DashboardSummary | null>(null);
   const [sessionId, setSessionId] = useState("");
   const [loading, setLoading] = useState(true);
-  const [dashboardError, setDashboardError] = useState("");
+  const [error, setError] = useState("");
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -120,22 +90,6 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    if (!access.loading && !access.isLoggedIn) {
-      router.replace("/login?next=/dashboard");
-    }
-  }, [access.loading, access.isLoggedIn, router]);
-
-  const isSubscribed = useMemo(() => access.isSubscribed, [access.isSubscribed]);
-
-  useEffect(() => {
-    if (access.loading) return;
-    if (!access.isLoggedIn) return;
-
-    if (!isSubscribed) {
-      setLoading(false);
-      return;
-    }
-
     if (!sessionId) {
       setLoading(false);
       return;
@@ -146,7 +100,7 @@ export default function DashboardPage() {
     async function load() {
       try {
         setLoading(true);
-        setDashboardError("");
+        setError("");
 
         const res = await fetch(
           `/api/dashboard-summary?session_id=${encodeURIComponent(sessionId)}`,
@@ -164,9 +118,7 @@ export default function DashboardPage() {
         }
       } catch (err) {
         if (!cancelled) {
-          setDashboardError(
-            err instanceof Error ? err.message : "Unknown dashboard error"
-          );
+          setError(err instanceof Error ? err.message : "Unknown dashboard error");
         }
       } finally {
         if (!cancelled) {
@@ -180,148 +132,9 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [sessionId, access.loading, access.isLoggedIn, isSubscribed]);
+  }, [sessionId]);
 
   const latest = data?.recentSessions?.[0] ?? null;
-
-  if (access.loading) {
-    return (
-      <PageShell>
-        <Card muted>
-          <CardContent className="py-10">
-            <p className="text-sm text-slate-600">Loading your dashboard...</p>
-          </CardContent>
-        </Card>
-      </PageShell>
-    );
-  }
-
-  if (access.error && !access.trialStatus) {
-    return (
-      <PageShell>
-        <Card muted>
-          <CardContent className="py-10">
-            <p className="text-sm text-red-600">{access.error}</p>
-          </CardContent>
-        </Card>
-      </PageShell>
-    );
-  }
-
-  if (!access.isLoggedIn) {
-    return null;
-  }
-
-  if (!isSubscribed) {
-    const answered = access.trialStatus?.answered ?? 0;
-    const limit = access.trialStatus?.limit ?? 20;
-    const remaining = access.trialStatus?.remaining ?? Math.max(0, limit - answered);
-
-    return (
-      <PageShell>
-        <div className="space-y-8">
-          <PageHeader
-            eyebrow="Dashboard"
-            title="Study Control Center"
-            description="Your dashboard is active, but advanced analytics and premium study tools are reserved for subscribers."
-            actions={
-              <Link href="/explore-subscriptions">
-                <Button size="lg">Explore Plans</Button>
-              </Link>
-            }
-          />
-
-          <section className="grid gap-4 md:grid-cols-3">
-            <Card>
-              <CardHeader>
-                <CardDescription>Account</CardDescription>
-                <CardTitle className="text-2xl">Signed in</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm text-slate-600">
-                  {access.userEmail || "Your PMRPrep account is active."}
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardDescription>Free Trial Progress</CardDescription>
-                <CardTitle className="text-2xl">
-                  {answered}/{limit}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm text-slate-600">
-                  {remaining > 0
-                    ? `${remaining} trial questions remaining`
-                    : "Your free trial is complete"}
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardDescription>Current Plan</CardDescription>
-                <CardTitle className="text-2xl capitalize">
-                  {access.trialStatus?.plan ?? "trial"}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm text-slate-600">
-                  Upgrade to unlock analytics, custom quizzes, and the full PMRPrep study experience.
-                </p>
-              </CardContent>
-            </Card>
-          </section>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Unlock the full PMRPrep dashboard</CardTitle>
-              <CardDescription>
-                Subscribers will get deeper performance tracking, more advanced study tools, and full premium access.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-wrap gap-3">
-              <Link href="/explore-subscriptions">
-                <Button>View Subscription Options</Button>
-              </Link>
-              <Link href="/trial">
-                <Button variant="outline">Continue Trial</Button>
-              </Link>
-            </CardContent>
-          </Card>
-
-          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            <LockedFeatureCard
-              title="Performance Analytics"
-              description="Track overall accuracy, percentile, and category-by-category performance over time."
-            />
-            <LockedFeatureCard
-              title="Category Breakdown"
-              description="See your weakest PM&R domains and focus your studying where it matters most."
-            />
-            <LockedFeatureCard
-              title="Custom Quiz Builder"
-              description="Build targeted study sets from the full PMRPrep question bank."
-            />
-            <LockedFeatureCard
-              title="Question Bank Access"
-              description="Unlock broader access to premium question workflows beyond the free trial."
-            />
-            <LockedFeatureCard
-              title="Advanced Study Tools"
-              description="Use premium-only review and study experiences as PMRPrep expands."
-            />
-            <LockedFeatureCard
-              title="Future Adaptive Features"
-              description="Get access to future analytics, adaptive studying, and longitudinal progress tools."
-            />
-          </section>
-        </div>
-      </PageShell>
-    );
-  }
 
   return (
     <PageShell>
@@ -401,10 +214,10 @@ export default function DashboardPage() {
                 <p className="text-sm text-slate-600">Loading recent question sets...</p>
               </CardContent>
             </Card>
-          ) : dashboardError ? (
+          ) : error ? (
             <Card muted>
               <CardContent className="py-8">
-                <p className="text-sm text-red-600">{dashboardError}</p>
+                <p className="text-sm text-red-600">{error}</p>
               </CardContent>
             </Card>
           ) : !data?.recentSessions?.length ? (
@@ -503,7 +316,7 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
           ) : (
-            <Card className="overflow-hidden p-0">
+            <Card className="p-0 overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm">
                   <thead className="border-b border-slate-200 bg-slate-50 text-slate-600">

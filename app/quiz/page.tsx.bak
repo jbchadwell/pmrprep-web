@@ -27,18 +27,6 @@ mode: "quiz" | "summary";
   quizAttemptId: string;
 };
 
-type TrialStatus = {
-  mode: "preview" | "preview_locked" | "trial" | "trial_locked" | "subscriber";
-  plan: string;
-  subscribed: boolean;
-  needsEmail: boolean;
-  answered: number;
-  limit: number | null;
-  remaining: number | null;
-  locked: boolean;
-  message: string | null;
-};
-
 const STORAGE_KEY = "pmrprep_phase1_quiz_state_v2";
 const SESSION_KEY = "pmrprep_session_id";
 const CUSTOM_KEY = "pmrprep_custom_quiz_config";
@@ -66,25 +54,6 @@ async function getAccessToken(): Promise<string | null> {
   } catch {
     return null;
   }
-}
-
-async function getTrialStatus(token: string): Promise<TrialStatus> {
-  const res = await fetch("/api/trial-status", {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-    cache: "no-store",
-  });
-
-  const json = (await res.json()) as TrialStatus | { error?: string };
-
-  if (!res.ok) {
-    throw new Error(
-      "error" in json && json.error ? json.error : "Failed to load access status"
-    );
-  }
-
-  return json as TrialStatus;
 }
 
 export default function QuizPage() {
@@ -188,20 +157,6 @@ mode: "quiz",
     const authHeaders: Record<string, string> = token
       ? { Authorization: `Bearer ${token}` }
       : {};
-
-    if (mode === "custom" && !token) {
-      clearQuizStateAndRedirect("/login?next=/builder");
-      return;
-    }
-
-    if (mode === "custom" && token) {
-      const trialStatus = await getTrialStatus(token);
-
-      if (!trialStatus.subscribed) {
-        clearQuizStateAndRedirect("/explore-subscriptions");
-        return;
-      }
-    }
 
     let res: Response;
 

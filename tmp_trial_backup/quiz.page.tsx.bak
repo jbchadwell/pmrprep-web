@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import type { ChoiceKey, DbQuestionRow, QuizQuestion } from "@/lib/quizTypes";
 import { mapDbRowToQuizQuestion } from "@/lib/mapQuestion";
 import QuizHeader from "./QuizHeader";
-import { supabaseBrowser } from "@/lib/supabaseBrowser";
 
 type FlagReason = "incorrect" | "poorly_worded" | "other";
 
@@ -25,18 +24,6 @@ type QuizState = {
 mode: "quiz" | "summary";
   sessionId: string;
   quizAttemptId: string;
-};
-
-type TrialStatus = {
-  mode: "preview" | "preview_locked" | "trial" | "trial_locked" | "subscriber";
-  plan: string;
-  subscribed: boolean;
-  needsEmail: boolean;
-  answered: number;
-  limit: number | null;
-  remaining: number | null;
-  locked: boolean;
-  message: string | null;
 };
 
 const STORAGE_KEY = "pmrprep_phase1_quiz_state_v2";
@@ -59,34 +46,6 @@ function newAttemptId(): string {
   return crypto.randomUUID();
 }
 
-async function getAccessToken(): Promise<string | null> {
-  try {
-    const { data } = await supabaseBrowser.auth.getSession();
-    return data.session?.access_token ?? null;
-  } catch {
-    return null;
-  }
-}
-
-async function getTrialStatus(token: string): Promise<TrialStatus> {
-  const res = await fetch("/api/trial-status", {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-    cache: "no-store",
-  });
-
-  const json = (await res.json()) as TrialStatus | { error?: string };
-
-  if (!res.ok) {
-    throw new Error(
-      "error" in json && json.error ? json.error : "Failed to load access status"
-    );
-  }
-
-  return json as TrialStatus;
-}
-
 export default function QuizPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
@@ -105,29 +64,6 @@ mode: "quiz",
   const [flagReason, setFlagReason] = useState<FlagReason>("incorrect");
   const [flagComment, setFlagComment] = useState("");
   const savingFlagRef = useRef(false);
-
-  function clearQuizStateAndRedirect(target: string, clearState = true) {
-    if (clearState) {
-      localStorage.removeItem(STORAGE_KEY);
-      localStorage.removeItem(CUSTOM_KEY);
-    }
-    setLoading(false);
-    router.push(target);
-  }
-
-  function handleGateResponse(code?: string) {
-    if (code === "ANON_TRIAL_EXHAUSTED") {
-      clearQuizStateAndRedirect("/login", false);
-      return true;
-    }
-
-    if (code === "TRIAL_EXHAUSTED") {
-      clearQuizStateAndRedirect("/subscribe");
-      return true;
-    }
-
-    return false;
-  }
 
   async function hydrateAttempt(attemptId: string, reviewMode: boolean) {
     setLoading(true);
@@ -181,27 +117,8 @@ mode: "quiz",
 
     const params = new URLSearchParams(window.location.search);
     const mode = params.get("mode");
-    const src = params.get("src");
     const countParam = Number(params.get("count") || "10");
     const count = Number.isFinite(countParam) && countParam > 0 ? countParam : 10;
-    const token = await getAccessToken();
-    const authHeaders: Record<string, string> = token
-      ? { Authorization: `Bearer ${token}` }
-      : {};
-
-    if (mode === "custom" && !token) {
-      clearQuizStateAndRedirect("/login?next=/builder");
-      return;
-    }
-
-    if (mode === "custom" && token) {
-      const trialStatus = await getTrialStatus(token);
-
-      if (!trialStatus.subscribed) {
-        clearQuizStateAndRedirect("/explore-subscriptions");
-        return;
-      }
-    }
 
     let res: Response;
 
@@ -216,30 +133,20 @@ mode: "quiz",
 
       res = await fetch("/api/quiz/custom", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...authHeaders,
-        } as HeadersInit,
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           count: config.count ?? 10,
           primaryCategories: config.primaryCategories,
         }),
       });
     } else {
-      const quizApiParams = new URLSearchParams();
-      quizApiParams.set("count", String(count));
-      if (src) quizApiParams.set("src", src);
-
-      res = await fetch(`/api/quiz?${quizApiParams.toString()}`, {
-        headers: authHeaders as HeadersInit,
-      });
+      res = await fetch(`/api/quiz?count=${count}`);
     }
 
-    const json = await res.json().catch(() => ({}));
+    const json = await res.json();
 
     if (!res.ok) {
-      if (handleGateResponse(json?.code)) return;
-      throw new Error(json?.error || json?.message || "Failed to load quiz questions");
+      throw new Error(json?.error || "Failed to load quiz questions");
     }
 
     const mapped = ((json.questions ?? []) as DbQuestionRow[]).map(mapDbRowToQuizQuestion);
@@ -372,14 +279,8 @@ const hasAnswered = hasSubmitted;
       answers: answersPayload,
     };
 
-    const token = await getAccessToken();
-    const authHeaders: Record<string, string> = token
-      ? { Authorization: `Bearer ${token}` }
-      : {};
-
     if (
       useBeacon &&
-      !token &&
       typeof navigator !== "undefined" &&
       typeof navigator.sendBeacon === "function"
     ) {
@@ -390,20 +291,11 @@ const hasAnswered = hasSubmitted;
       return;
     }
 
-    const res = await fetch("/api/attempt", {
+    await fetch("/api/attempt", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...authHeaders,
-      } as HeadersInit,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-
-    if (!res.ok) {
-      const json = await res.json().catch(() => ({}));
-      if (handleGateResponse(json?.code)) return;
-      throw new Error(json?.error || json?.message || "Failed to save attempt");
-    }
   }
 
   useEffect(() => {
@@ -469,18 +361,6 @@ const hasAnswered = hasSubmitted;
 
   async function goNext() {
     const lastIndex = state.questions.length - 1;
-
-    const params = new URLSearchParams(window.location.search);
-    const src = params.get("src");
-    const token = await getAccessToken();
-
-    if (src === "trial" && !token && hasSubmitted && state.currentIndex >= 2) {
-      try {
-        await saveAttemptProgress();
-      } catch {}
-      clearQuizStateAndRedirect("/login", false);
-      return;
-    }
 
     if (state.currentIndex >= lastIndex) {
       if (hasSubmitted) {
