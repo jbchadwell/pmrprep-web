@@ -49,12 +49,6 @@ const plans = [
 ];
 
 export default function HomePage() {
-  function handleComingSoon() {
-    alert(
-      "Coming soon. Right now, try our free trial and we will let you know when subscriptions are ready."
-    );
-  }
-
   return (
     <PageShell>
       <div className="space-y-8">
@@ -75,7 +69,7 @@ export default function HomePage() {
             <Card
               key={plan.title}
               className={[
-                "h-full border-slate-200 shadow-sm",
+                "border-slate-200 shadow-sm",
                 plan.highlight ? "border-blue-500 bg-blue-50" : "",
               ].join(" ")}
             >
@@ -84,22 +78,22 @@ export default function HomePage() {
                 <CardDescription>{plan.description}</CardDescription>
               </CardHeader>
 
-              <CardContent className="flex h-full flex-col justify-between gap-6">
-                <div className="space-y-4">
-                  <div className="text-2xl font-semibold text-slate-900">
-                    {plan.price}
-                  </div>
-
-                  <ul className="space-y-2 text-sm text-slate-700">
-                    {plan.bullets.map((bullet) => (
-                      <li key={bullet}>• {bullet}</li>
-                    ))}
-                  </ul>
+              <CardContent className="space-y-5">
+                <div className="text-2xl font-semibold text-slate-900">
+                  {plan.price}
                 </div>
 
-                <Button className="w-full" onClick={handleComingSoon}>
-                  Choose Plan
-                </Button>
+                <ul className="space-y-2 text-sm text-slate-700">
+                  {plan.bullets.map((bullet) => (
+                    <li key={bullet}>• {bullet}</li>
+                  ))}
+                </ul>
+
+                <div className="pt-2">
+                  <Link href="/subscribe" className="block">
+                    <Button className="w-full">Choose Plan</Button>
+                  </Link>
+                </div>
               </CardContent>
             </Card>
           ))}
