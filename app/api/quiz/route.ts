@@ -98,7 +98,7 @@ export async function GET(req: Request) {
     }
 
     const svc = createClient(supabaseUrl, serviceKey);
-    const { data, error } = await svc.rpc("get_random_questions", {
+    const { data, error } = await svc.rpc("get_random_quiz_questions_safe", {
       qty: allowedCount,
     });
 

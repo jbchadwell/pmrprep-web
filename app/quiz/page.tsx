@@ -10,10 +10,19 @@ import { supabaseBrowser } from "@/lib/supabaseBrowser";
 
 type FlagReason = "incorrect" | "poorly_worded" | "other";
 
+type AnswerExplanation = {
+  text: string;
+  explanation: string;
+  isCorrect: boolean;
+};
+
 type AnswerState = {
-  selectedKey?: ChoiceKey;     // selected (can exist before submit)
-  submitted?: boolean;         // NEW: only true after user presses Submit
-  isCorrect?: boolean;         // set only after submit
+  selectedKey?: ChoiceKey;
+  submitted?: boolean;
+  isCorrect?: boolean;
+  correctAnswerText?: string | null;
+  answerExtraInfo?: string | null;
+  explanations?: AnswerExplanation[];
   marked?: boolean;
   flag?: { reason: FlagReason; comment?: string; saved?: boolean };
 };
@@ -351,14 +360,13 @@ const hasAnswered = hasSubmitted;
 
     const answersPayload = state.questions.map((q) => {
       const a = state.answersById[q.id];
-      const correct = q.choices.find((c) => c.isCorrect)?.key;
+      const selectedChoice = q.choices.find((c) => c.key === a?.selectedKey);
       return {
         questionId: q.id,
         questionUid: q.uid,
         primaryCategory: q.primaryCategory ?? null,
         selectedKey: a?.selectedKey,
-        correctKey: correct,
-        isCorrect: a?.isCorrect,
+        selectedText: selectedChoice?.text ?? null,
       };
     });
 
@@ -445,14 +453,30 @@ const hasAnswered = hasSubmitted;
     }));
   }
 
-  function submitAnswer() {
+  async function submitAnswer() {
     if (!currentQuestion) return;
     if (!hasSelected) return;
     if (hasSubmitted) return;
 
     const selectedKey = state.answersById[currentQuestion.id]?.selectedKey;
-    const chosen = currentQuestion.choices.find((c) => c.key === selectedKey);
-    const isCorrect = Boolean(chosen?.isCorrect);
+    const selectedChoice = currentQuestion.choices.find((c) => c.key === selectedKey);
+
+    const res = await fetch("/api/quiz/grade", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        questionId: currentQuestion.id,
+        selectedText: selectedChoice?.text ?? null,
+      }),
+    });
+
+    const json = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      throw new Error(json?.error || "Failed to grade answer");
+    }
 
     setState((s) => ({
       ...s,
@@ -461,7 +485,10 @@ const hasAnswered = hasSubmitted;
         [currentQuestion.id]: {
           ...(s.answersById[currentQuestion.id] ?? {}),
           submitted: true,
-          isCorrect,
+          isCorrect: Boolean(json?.isCorrect),
+          correctAnswerText: json?.correctAnswerText ?? null,
+          answerExtraInfo: json?.answerExtraInfo ?? null,
+          explanations: Array.isArray(json?.explanations) ? json.explanations : [],
         },
       },
     }));
@@ -798,8 +825,8 @@ const hasAnswered = hasSubmitted;
             {currentQuestion.choices.map((c) => {
               const selected = ans?.selectedKey === c.key;
               const answered = Boolean(ans?.submitted);
-              const isCorrectChoice = c.key === correctKey;
-              const chosenWrong = answered && selected && !c.isCorrect;
+              const chosenWrong = answered && selected && ans?.isCorrect === false;
+              const chosenCorrect = answered && selected && ans?.isCorrect === true;
 
               return (
                 <button
@@ -810,7 +837,7 @@ const hasAnswered = hasSubmitted;
                     "w-full text-left rounded-xl border px-4 py-3 sm:py-4 text-base transition",
                     !answered && "hover:bg-gray-50",
                     !answered && selected && "bg-blue-50 border-blue-200 ring-1 ring-blue-100",
-                    answered && isCorrectChoice && "bg-emerald-50 border-emerald-200",
+                    chosenCorrect && "bg-emerald-50 border-emerald-200",
                     chosenWrong && "border-red-300 ring-1 ring-red-200"
                   )}
                   type="button"
@@ -841,31 +868,28 @@ const hasAnswered = hasSubmitted;
             <div className="mt-6 space-y-3">
               <div className="text-sm font-semibold">Explanations</div>
 
-              {currentQuestion.choices.map((c) => {
-                const isCorrect = c.isCorrect;
-                return (
-                  <div
-                    key={c.key}
-                    className={cx(
-                      "rounded-xl border p-4",
-                      isCorrect ? "border-emerald-200 bg-emerald-50" : "border-gray-200"
-                    )}
-                  >
-                    <div className={cx("font-mono font-semibold", isCorrect ? "text-base" : "text-sm")}>
-                      {c.key}. {c.text}
-                    </div>
-                    <div className={cx(isCorrect ? "text-base mt-2" : "text-sm mt-2 text-gray-600")}>
-                      {c.explanation}
-                    </div>
+              {(ans?.explanations ?? []).map((item, idx) => (
+                <div
+                  key={`${item.text}-${idx}`}
+                  className={cx(
+                    "rounded-xl border p-4",
+                    item.isCorrect ? "border-emerald-200 bg-emerald-50" : "border-gray-200"
+                  )}
+                >
+                  <div className={cx("font-semibold", item.isCorrect ? "text-base" : "text-sm")}>
+                    {item.text}
                   </div>
-                );
-              })}
+                  <div className={cx(item.isCorrect ? "text-base mt-2" : "text-sm mt-2 text-gray-600")}>
+                    {item.explanation}
+                  </div>
+                </div>
+              ))}
 
               <div className="mt-3 text-sm text-gray-600">
-                {currentQuestion.answerExtraInfo && (
+                {ans?.answerExtraInfo && (
                   <>
                     <span className="font-medium text-gray-900">Answer extra info:</span>{" "}
-                    {currentQuestion.answerExtraInfo}
+                    {ans.answerExtraInfo}
                   </>
                 )}
               </div>

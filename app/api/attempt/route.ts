@@ -8,8 +8,7 @@ type AnswerRow = {
   questionUid?: string;
   primaryCategory?: string | null;
   selectedKey?: string;
-  correctKey?: string;
-  isCorrect?: boolean;
+  selectedText?: string | null;
 };
 
 type Body = {
@@ -148,17 +147,46 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: delError.message }, { status: 500 });
   }
 
-  const rows = body.answers.map((a) => ({
-    quiz_attempt_id: body.quizAttemptId,
-    session_id: body.sessionId,
-    user_id: authedUserId,
-    question_id: a.questionId,
-    question_uid: a.questionUid ?? null,
-    primary_category: a.primaryCategory ?? null,
-    selected_key: a.selectedKey ?? null,
-    correct_key: a.correctKey ?? null,
-    is_correct: a.isCorrect ?? null,
-  }));
+  const answeredQuestionIds = body.answers
+    .map((a) => a.questionId)
+    .filter(Boolean);
+
+  let correctAnswerMap = new Map<string, string>();
+
+  if (answeredQuestionIds.length > 0) {
+    const { data: questionRows, error: questionError } = await supabase
+      .from("questions")
+      .select("id, correct_answer")
+      .in("id", answeredQuestionIds);
+
+    if (questionError) {
+      return NextResponse.json({ error: questionError.message }, { status: 500 });
+    }
+
+    correctAnswerMap = new Map(
+      (questionRows ?? []).map((row) => [row.id as string, row.correct_answer as string])
+    );
+  }
+
+  const rows = body.answers.map((a) => {
+    const correctAnswer = correctAnswerMap.get(a.questionId);
+    const isCorrect =
+      a.selectedText != null && correctAnswer != null
+        ? a.selectedText === correctAnswer
+        : null;
+
+    return {
+      quiz_attempt_id: body.quizAttemptId,
+      session_id: body.sessionId,
+      user_id: authedUserId,
+      question_id: a.questionId,
+      question_uid: a.questionUid ?? null,
+      primary_category: a.primaryCategory ?? null,
+      selected_key: a.selectedKey ?? null,
+      correct_key: null,
+      is_correct: isCorrect,
+    };
+  });
 
   if (rows.length > 0) {
     const { error: ansError } = await supabase
