@@ -318,11 +318,6 @@ mode: "quiz",
 const hasSubmitted = Boolean(ans?.submitted);
 const hasAnswered = hasSubmitted;
 
-  const correctKey = useMemo(() => {
-    if (!currentQuestion) return undefined;
-    return currentQuestion.choices.find((c) => c.isCorrect)?.key;
-  }, [currentQuestion]);
-
   const banner = useMemo(() => {
     if (!currentQuestion) return null;
     const a = state.answersById[currentQuestion.id];
