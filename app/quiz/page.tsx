@@ -668,7 +668,7 @@ const hasAnswered = hasSubmitted;
     return (
       <div className="min-h-screen bg-white text-gray-900">
         <div className="mx-auto max-w-3xl p-4 sm:p-6 pt-6 sm:pt-8">
-        <QuizHeader mode={state.mode} currentIndex={state.currentIndex} total={state.questions.length} onExitConfirm={() => { localStorage.removeItem("pmrprep_phase1_quiz_state_v2"); router.push("/"); }} />
+        <QuizHeader mode={state.mode} currentIndex={state.currentIndex} total={state.questions.length} onExitConfirm={() => { localStorage.removeItem("pmrprep_phase1_quiz_state_v2"); router.push("/dashboard"); }} />
           <div className="flex items-center justify-between gap-3 mb-4">
             <div className="text-sm text-gray-600">
               Summary · Attempt {state.quizAttemptId.slice(0, 8)}
@@ -740,6 +740,16 @@ const hasAnswered = hasSubmitted;
               >
                 Back to quiz
               </button>
+              <button
+                onClick={() => {
+                  localStorage.removeItem("pmrprep_phase1_quiz_state_v2");
+                  router.push("/dashboard");
+                }}
+                className="rounded-lg bg-gray-900 px-4 py-2 text-sm text-white hover:bg-black"
+                type="button"
+              >
+                Return to dashboard
+              </button>
             </div>
           </div>
         </div>
@@ -754,7 +764,7 @@ const hasAnswered = hasSubmitted;
   return (
     <div className="min-h-screen bg-white text-gray-900">
       <div className="mx-auto max-w-3xl p-4 sm:p-6 pt-6 sm:pt-8">
-        <QuizHeader mode={state.mode} currentIndex={state.currentIndex} total={state.questions.length} onExitConfirm={() => { localStorage.removeItem("pmrprep_phase1_quiz_state_v2"); router.push("/"); }} />
+        <QuizHeader mode={state.mode} currentIndex={state.currentIndex} total={state.questions.length} onExitConfirm={() => { localStorage.removeItem("pmrprep_phase1_quiz_state_v2"); router.push("/dashboard"); }} />
         <div className="flex items-center justify-between gap-3 mb-3">
           <div className="text-sm text-gray-600">
             Quiz · {state.currentIndex + 1} / {total}{" "}
