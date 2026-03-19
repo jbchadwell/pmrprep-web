@@ -4,6 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 type Body = {
   questionId: string;
   selectedText: string | null;
+  displayedChoices?: string[];
 };
 
 export async function POST(req: Request) {
@@ -51,28 +52,37 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Question not found" }, { status: 404 });
     }
 
-    const explanations = [
-      {
-        text: row.correct_answer,
-        explanation: row.correct_answer_explanation,
-        isCorrect: true,
-      },
-      {
-        text: row.distractor_1,
-        explanation: row.distractor_1_explanation,
-        isCorrect: false,
-      },
-      {
-        text: row.distractor_2,
-        explanation: row.distractor_2_explanation,
-        isCorrect: false,
-      },
-      {
-        text: row.distractor_3,
-        explanation: row.distractor_3_explanation,
-        isCorrect: false,
-      },
-    ];
+    const explanationLookup = new Map(
+      [
+        {
+          text: row.correct_answer,
+          explanation: row.correct_answer_explanation,
+          isCorrect: true,
+        },
+        {
+          text: row.distractor_1,
+          explanation: row.distractor_1_explanation,
+          isCorrect: false,
+        },
+        {
+          text: row.distractor_2,
+          explanation: row.distractor_2_explanation,
+          isCorrect: false,
+        },
+        {
+          text: row.distractor_3,
+          explanation: row.distractor_3_explanation,
+          isCorrect: false,
+        },
+      ].map((item) => [item.text, item] as const)
+    );
+
+    const explanations =
+      Array.isArray(body.displayedChoices) && body.displayedChoices.length > 0
+        ? body.displayedChoices
+            .map((text) => explanationLookup.get(text))
+            .filter((item): item is NonNullable<typeof item> => Boolean(item))
+        : Array.from(explanationLookup.values());
 
     const isCorrect =
       body.selectedText != null ? body.selectedText === row.correct_answer : false;

@@ -464,6 +464,7 @@ const hasAnswered = hasSubmitted;
       body: JSON.stringify({
         questionId: currentQuestion.id,
         selectedText: selectedChoice?.text ?? null,
+        displayedChoices: currentQuestion.choices.map((c) => c.text),
       }),
     });
 
