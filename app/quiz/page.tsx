@@ -113,6 +113,8 @@ mode: "quiz",
   const [bottomBarOpen, setBottomBarOpen] = useState(false);
   const [flagReason, setFlagReason] = useState<FlagReason>("incorrect");
   const [flagComment, setFlagComment] = useState("");
+  const [flagSaved, setFlagSaved] = useState(false);
+  const [flagError, setFlagError] = useState<string | null>(null);
   const savingFlagRef = useRef(false);
 
   function clearQuizStateAndRedirect(target: string, clearState = true) {
@@ -545,25 +547,12 @@ const hasAnswered = hasSubmitted;
     if (!currentQuestion) return;
     if (savingFlagRef.current) return;
 
-    setState((s) => ({
-      ...s,
-      answersById: {
-        ...s.answersById,
-        [currentQuestion.id]: {
-          ...(s.answersById[currentQuestion.id] ?? {}),
-          flag: {
-            reason: flagReason,
-            comment: flagComment.trim() || undefined,
-            saved: false,
-          },
-        },
-      },
-    }));
-
-    setFlagOpen(false);
+    setFlagError(null);
 
     savingFlagRef.current = true;
     try {
+      const trimmedComment = flagComment.trim() || undefined;
+
       const res = await fetch("/api/flag", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -573,12 +562,15 @@ const hasAnswered = hasSubmitted;
           questionId: currentQuestion.id,
           questionUid: currentQuestion.uid,
           reason: flagReason,
-          comment: flagComment.trim() || undefined,
+          comment: trimmedComment,
         }),
       });
 
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || "Failed to save flag");
+
+      setFlagSaved(true);
+      setFlagOpen(false);
 
       setState((s) => ({
         ...s,
@@ -588,16 +580,19 @@ const hasAnswered = hasSubmitted;
             ...(s.answersById[currentQuestion.id] ?? {}),
             flag: {
               reason: flagReason,
-              comment: flagComment.trim() || undefined,
+              comment: trimmedComment,
               saved: true,
             },
           },
         },
       }));
-    } finally {
-      savingFlagRef.current = false;
+
       setFlagComment("");
       setFlagReason("incorrect");
+    } catch (error) {
+      setFlagError(error instanceof Error ? error.message : "Failed to save report");
+    } finally {
+      savingFlagRef.current = false;
     }
   }
 
@@ -797,7 +792,7 @@ const hasAnswered = hasSubmitted;
               )}
               type="button"
             >
-              {ans?.marked ? "Flagged" : "Flag"}
+              {ans?.marked ? "Marked" : "Mark"}
             </button>
           </div>
         </div>
@@ -973,14 +968,21 @@ const hasAnswered = hasSubmitted;
                 })}
               </div>
 
-            <div className="mt-2 pt-2 border-t flex justify-center">
+            <div className="mt-2 pt-2 border-t flex flex-col items-center justify-center gap-1">
               <button
-                onClick={() => setFlagOpen(true)}
+                onClick={() => {
+                  setFlagSaved(false);
+                  setFlagError(null);
+                  setFlagOpen(true);
+                }}
                 className="text-xs text-gray-600 underline underline-offset-4 hover:text-gray-900"
                 type="button"
               >
                 Report Question
               </button>
+              {flagSaved && (
+                <div className="text-xs text-emerald-600">Report submitted</div>
+              )}
             </div>
 
             </div>
@@ -993,7 +995,7 @@ const hasAnswered = hasSubmitted;
         {flagOpen && (
           <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4">
             <div className="w-full max-w-lg rounded-2xl bg-white border p-5 shadow-xl">
-              <div className="text-base font-semibold">Flag question</div>
+              <div className="text-base font-semibold">Report question</div>
 
               <div className="mt-4 space-y-2 text-sm">
                 <label className="flex gap-2 items-center">
@@ -1002,7 +1004,7 @@ const hasAnswered = hasSubmitted;
                     checked={flagReason === "incorrect"}
                     onChange={() => setFlagReason("incorrect")}
                   />
-                  Incorrect
+                  Incorrect answer key
                 </label>
                 <label className="flex gap-2 items-center">
                   <input
@@ -1010,7 +1012,7 @@ const hasAnswered = hasSubmitted;
                     checked={flagReason === "poorly_worded"}
                     onChange={() => setFlagReason("poorly_worded")}
                   />
-                  Poorly worded
+                  Question is unclear
                 </label>
                 <label className="flex gap-2 items-center">
                   <input
@@ -1018,7 +1020,7 @@ const hasAnswered = hasSubmitted;
                     checked={flagReason === "other"}
                     onChange={() => setFlagReason("other")}
                   />
-                  Other
+                  Other issue
                 </label>
               </div>
 
@@ -1029,6 +1031,10 @@ const hasAnswered = hasSubmitted;
                 value={flagComment}
                 onChange={(e) => setFlagComment(e.target.value)}
               />
+
+              {flagError && (
+                <div className="mt-3 text-sm text-red-600">{flagError}</div>
+              )}
 
               <div className="mt-4 flex justify-end gap-2">
                 <button
@@ -1043,7 +1049,7 @@ const hasAnswered = hasSubmitted;
                   onClick={submitFlag}
                   type="button"
                 >
-                  Submit
+                  Submit report
                 </button>
               </div>
             </div>
